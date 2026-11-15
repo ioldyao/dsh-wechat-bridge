@@ -71,6 +71,8 @@ SEND_ENABLED = True
 SKIP_OLDER = 15.0
 POLL_SEC = 2.0
 # 群里只有被点名才转（正文里带这些词之一）。私聊不受这个限制。
+# 自己的微信昵称 / 备注 / wxid 永远算「点我」，@ 自己时正文里就是昵称，不用手配别名。
+SELF_NAMES = []
 ALIASES = []
 DEFAULT_ALIASES = "大肥鱼,鲸鲸,鲸鱼娘,鲸鱼,肥鱼"
 
@@ -237,6 +239,11 @@ def main():
     try:
         info = db.get_self_info() or {}
         log("昵称：", info.get("nick_name") or info.get("remark") or "?")
+        # 自己的名字进「点名」判定：群里 @ 自己，正文里就是昵称
+        for _n in (info.get("nick_name"), info.get("remark"), me):
+            _n = str(_n or "").strip()
+            if _n and _n not in SELF_NAMES:
+                SELF_NAMES.append(_n)
     except Exception:
         pass
 
@@ -2129,7 +2136,7 @@ def main():
             # 群里：点名 / 主人说话 / 活跃群 才进 DSH（不然每个群都在刷屏）
             at_me = False
             if is_group:
-                at_me = any(a in raw for a in ALIASES)
+                at_me = any(a in raw for a in ALIASES) or any(n in raw for n in SELF_NAMES)
                 called = (
                     at_me
                     or is_master(sender, nickname)
@@ -2198,9 +2205,10 @@ def main():
     threading.Thread(target=outbox_loop, daemon=True).start()
 
     refresh_config()
-    log("配置：群上下文 %d 条｜日记 %s｜主人 %s｜屏蔽 %d 个" % (
+    log("配置：群上下文 %d 条｜日记 %s｜主人 %s｜屏蔽 %d 个｜活跃群 %s" % (
         CFG["群上下文条数"], "开" if CFG["日记"] else "关",
-        "/".join(CFG["主人"]) or "（没设）", len(CFG["屏蔽"])))
+        "/".join(CFG["主人"]) or "（没设）", len(CFG["屏蔽"]),
+        "/".join(CFG.get("活跃群") or []) or "（没设）"))
 
     def config_loop():
         while True:
