@@ -129,12 +129,8 @@ def refresh_config():
         活跃度 = {}
         for k, v in (c.get("群活跃度") or {}).items():
             名 = str(k or "").strip()
-            try:
-                数 = float(v)
-            except Exception:
-                continue
             if 名:
-                活跃度[名] = max(0.0, min(100.0, 数))
+                活跃度[名] = 规整等级(v)
         CFG["群活跃度"] = 活跃度
         CFG["活跃群"] = _活跃群列表()
         CFG_TS = time.time()
@@ -142,6 +138,43 @@ def refresh_config():
     except Exception as e:
         log("解析配置失败：", repr(e))
         return False
+
+
+群活跃等级 = ("潜水", "冒泡", "吐槽", "活跃")
+等级说明 = {
+    "潜水": "基本不接话，除非非说不可",
+    "冒泡": "偶尔冒一句，别抢话",
+    "吐槽": "有话就插一句吐槽，短",
+    "活跃": "想接就接，可以聊两句",
+}
+
+def 规整等级(v):
+    """老的数字写法也认：0-25 潜水 / 26-50 冒泡 / 51-75 吐槽 / 76-100 活跃。"""
+    s = str(v if v is not None else "").strip()
+    if s in 群活跃等级:
+        return s
+    try:
+        数 = float(s)
+    except Exception:
+        return "冒泡"
+    if 数 <= 25:
+        return "潜水"
+    if 数 <= 50:
+        return "冒泡"
+    if 数 <= 75:
+        return "吐槽"
+    return "活跃"
+
+def 群提示(chat, at_me):
+    if at_me:
+        return "（这条点名了你，必须回。）"
+    级 = CFG.get("群活跃度", {}).get(chat, "冒泡")
+    if 级 not in 群活跃等级:
+        级 = "冒泡"
+    return (
+        "（这条没点名你。你在这个群的状态是「%s」：%s。想开口就自然接一句，不想回就只回两个字 [不回]，别发别的。）"
+        % (级, 等级说明[级])
+    )
 
 
 def parse_args():
@@ -2162,23 +2195,11 @@ def main():
             if is_group:
                 if not called:
                     return
-                # 群活跃度：普通群友的闲聊按概率放行（0 = 只被点名/主人说话才进）
-                if not at_me and not is_master(sender, nickname):
-                    活跃度 = CFG.get("群活跃度", {}).get(chat, 100.0)
-                    if 活跃度 <= 0:
-                        return
-                    if 活跃度 < 100 and random.random() * 100 >= 活跃度:
-                        log("群活跃度：%s 抽签没中（%.0f%%），这条不转" % (chat, 活跃度))
-                        return
                 # 主人说话和点名都必进，只有普通群友的闲聊才吃频率闸
                 if not at_me and not is_master(sender, nickname) and not 频率允许(chat):
                     return
                 prefix = group_context(username, chat, CFG["群上下文条数"])
-                hint = (
-                    "（这条点名了你，必须回。）"
-                    if at_me
-                    else "（这条没点名你：想回就回；不想回就只回两个字 [不回]，别发别的。）"
-                )
+                hint = 群提示(chat, at_me)
                 if HOST_VERSION >= (1, 4, 7):
                     # 新宿主：提示和群上下文走独立字段，由宿主塞进系统提示词。
                     # 绝不拼进正文 —— 拼进正文模型会顺着复述，发到微信就是内部话刷屏。
@@ -2239,10 +2260,11 @@ def main():
     threading.Thread(target=outbox_loop, daemon=True).start()
 
     refresh_config()
-    log("配置：群上下文 %d 条｜日记 %s｜主人 %s｜屏蔽 %d 个｜活跃群 %s" % (
+    log("配置：群上下文 %d 条｜日记 %s｜主人 %s｜屏蔽 %d 个｜活跃群 %s｜活跃度 %s" % (
         CFG["群上下文条数"], "开" if CFG["日记"] else "关",
         "/".join(CFG["主人"]) or "（没设）", len(CFG["屏蔽"]),
-        "/".join(CFG.get("活跃群") or []) or "（没设）"))
+        "/".join(CFG.get("活跃群") or []) or "（没设）",
+        "、".join("%s=%s" % (k, v) for k, v in (CFG.get("群活跃度") or {}).items()) or "（没设）"))
 
     def config_loop():
         while True:
