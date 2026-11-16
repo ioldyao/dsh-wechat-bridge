@@ -30,7 +30,6 @@ import threading
 import time
 import traceback
 import urllib.error
-import urllib.parse
 import urllib.request
 
 # 有些嵌入式 Python 探测不到可写的临时目录（C 盘 TEMP 被安全软件拦住时会这样），
@@ -125,13 +124,6 @@ def refresh_config():
             "屏蔽": [str(x).strip() for x in (c.get("屏蔽") or []) if str(x).strip()],
             "群回复间隔秒": max(0.0, float(c.get("群回复间隔秒") or 0)),
             "群每小时上限": max(0.0, float(c.get("群每小时上限") or 0)),
-            "飞书开关": bool(c.get("飞书开关")),
-            "飞书应用ID": str(c.get("飞书应用ID") or "").strip(),
-            "飞书应用密钥": str(c.get("飞书应用密钥") or "").strip(),
-            "飞书多维表格": str(c.get("飞书多维表格") or "").strip(),
-            "飞书数据表": str(c.get("飞书数据表") or "").strip(),
-            "飞书地址": str(c.get("飞书地址") or "").strip(),
-            "飞书只记进DSH": bool(c.get("飞书只记进DSH")),
         }
         CFG["活跃群"] = _活跃群列表()
         CFG_TS = time.time()
@@ -139,130 +131,6 @@ def refresh_config():
     except Exception as e:
         log("解析配置失败：", repr(e))
         return False
-
-
-# ---------- 飞书多维表格：收到的微信消息记一行 ----------
-# 两条路都支持：
-#   1) 多维表格 OpenAPI（要自建应用 app_id/app_secret + app_token + table_id）
-#   2) webhook（自定义机器人 / 多维表格自动化「Webhook 触发」），直接 POST JSON
-# 记录在后台线程里做，失败只写日志，绝不卡住收消息的轮询。
-
-FEISHU_Q = []
-FEISHU_LOCK = threading.Lock()
-FEISHU_TOKEN = {"值": "", "时间": 0.0}
-FEISHU_字段 = ("聊天", "发送者", "时间", "内容", "来源")
-
-
-def _飞书配置():
-    c = CFG
-    return {
-        "开": bool(c.get("飞书开关")),
-        "应用ID": str(c.get("飞书应用ID") or "").strip(),
-        "应用密钥": str(c.get("飞书应用密钥") or "").strip(),
-        "表格": str(c.get("飞书多维表格") or "").strip(),
-        "数据表": str(c.get("飞书数据表") or "").strip(),
-        "地址": str(c.get("飞书地址") or "").strip(),
-        "只记进DSH": bool(c.get("飞书只记进DSH")),
-    }
-
-
-def _飞书_post(url, payload, headers=None, timeout=12):
-    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    h = {"content-type": "application/json; charset=utf-8"}
-    if headers:
-        h.update(headers)
-    req = urllib.request.Request(url, data=data, headers=h, method="POST")
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        body = r.read().decode("utf-8", "replace") or "{}"
-    try:
-        return json.loads(body)
-    except Exception:
-        return {"raw": body}
-
-
-def _飞书_token(conf):
-    now = time.time()
-    if FEISHU_TOKEN["值"] and now - FEISHU_TOKEN["时间"] < 1800:
-        return FEISHU_TOKEN["值"]
-    r = _飞书_post(
-        "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
-        {"app_id": conf["应用ID"], "app_secret": conf["应用密钥"]},
-    )
-    tok = str((r or {}).get("tenant_access_token") or "")
-    if tok:
-        FEISHU_TOKEN["值"] = tok
-        FEISHU_TOKEN["时间"] = now
-    return tok
-
-
-def _飞书写一条(conf, 聊天, 昵称, 时间文本, 内容, 群):
-    if conf["应用ID"] and conf["应用密钥"] and conf["表格"] and conf["数据表"]:
-        tok = _飞书_token(conf)
-        if not tok:
-            raise RuntimeError("拿不到 tenant_access_token（app_id/app_secret 不对，或应用没开多维表格权限）")
-        url = "https://open.feishu.cn/open-apis/bitable/v1/apps/%s/tables/%s/records" % (
-            urllib.parse.quote(conf["表格"], safe=""),
-            urllib.parse.quote(conf["数据表"], safe=""),
-        )
-        fields = {
-            "聊天": 聊天,
-            "发送者": 昵称,
-            "时间": 时间文本,
-            "内容": 内容,
-            "来源": "群聊" if 群 else "私聊",
-        }
-        r = _飞书_post(url, {"fields": fields}, {"authorization": "Bearer " + tok})
-        if isinstance(r, dict) and r.get("code") not in (0, None):
-            raise RuntimeError("飞书返回 %s：%s" % (r.get("code"), r.get("msg")))
-        return r
-    if conf["地址"]:
-        # webhook：把字段摊平，同时给一份 fields 包好的，方便多维表格自动化取
-        flat = {"聊天": 聊天, "发送者": 昵称, "时间": 时间文本, "内容": 内容, "来源": "群聊" if 群 else "私聊"}
-        return _飞书_post(conf["地址"], dict(flat, fields=flat))
-    raise RuntimeError("没配飞书地址，也没配多维表格（应用ID/密钥/表格/数据表）")
-
-
-def 飞书记录(聊天, 昵称, 时间戳, 内容, 群, 会进DSH):
-    """把一条微信消息排进飞书队列（毫秒级返回，真正的网络请求在后台线程）。"""
-    c = CFG
-    if not c.get("飞书开关"):
-        return
-    if c.get("飞书只记进DSH") and not 会进DSH:
-        return
-    try:
-        时间文本 = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(float(时间戳) or time.time()))
-    except Exception:
-        时间文本 = time.strftime("%Y-%m-%d %H:%M:%S")
-    文本 = str(内容 or "").strip()
-    if len(文本) > 2000:
-        文本 = 文本[:2000] + "…"
-    with FEISHU_LOCK:
-        if len(FEISHU_Q) > 500:      # 积压太多就丢，别把内存拖垮
-            return
-        FEISHU_Q.append((str(聊天 or ""), str(昵称 or ""), 时间文本, 文本, bool(群)))
-
-
-def _飞书工作线程():
-    while True:
-        item = None
-        with FEISHU_LOCK:
-            if FEISHU_Q:
-                item = FEISHU_Q.pop(0)
-        if not item:
-            time.sleep(0.5)
-            continue
-        conf = _飞书配置()
-        if not conf["开"]:
-            continue
-        for i in range(3):
-            try:
-                _飞书写一条(conf, *item)
-                break
-            except Exception as e:
-                if i >= 2:
-                    log("飞书记录失败：", repr(e))
-                else:
-                    time.sleep(1.5 * (i + 1))
 
 
 def parse_args():
@@ -2272,8 +2140,6 @@ def main():
                     or chat in CFG.get("活跃群", [])
                 )
 
-            # 飞书多维表格：收到的消息记一行（排队给后台线程，不挡轮询）
-            飞书记录(chat, nickname or sender, create_time, raw or content, is_group, called)
 
             # 群聊记日记 —— 不管点没点名都记，这是「群里的记忆」
             if is_group and CFG["日记"]:
@@ -2341,17 +2207,12 @@ def main():
     load_memes()
 
     threading.Thread(target=outbox_loop, daemon=True).start()
-    threading.Thread(target=_飞书工作线程, daemon=True).start()
 
     refresh_config()
     log("配置：群上下文 %d 条｜日记 %s｜主人 %s｜屏蔽 %d 个｜活跃群 %s" % (
         CFG["群上下文条数"], "开" if CFG["日记"] else "关",
         "/".join(CFG["主人"]) or "（没设）", len(CFG["屏蔽"]),
         "/".join(CFG.get("活跃群") or []) or "（没设）"))
-    log("飞书：%s（%s）" % (
-        "开" if CFG.get("飞书开关") else "关",
-        ("多维表格 " + (CFG.get("飞书数据表") or "?")) if CFG.get("飞书多维表格")
-        else ("webhook" if CFG.get("飞书地址") else "没配地址/表格")))
 
     def config_loop():
         while True:
