@@ -2108,6 +2108,8 @@ def main():
                 return              # 启动之前的旧消息
 
             chat = display_name(username) or username
+            上行提示 = ""
+            上行上下文 = ""
             if ONLY_CHATS and chat not in ONLY_CHATS:
                 return
 
@@ -2157,7 +2159,13 @@ def main():
                     if at_me
                     else "（这条没点名你：想回就回；不想回就只回两个字 [不回]，别发别的。）"
                 )
-                content = (prefix or "") + hint + content
+                if HOST_VERSION >= (1, 4, 7):
+                    # 新宿主：提示和群上下文走独立字段，由宿主塞进系统提示词。
+                    # 绝不拼进正文 —— 拼进正文模型会顺着复述，发到微信就是内部话刷屏。
+                    上行提示 = hint
+                    上行上下文 = (prefix or "").strip()
+                else:
+                    content = (prefix or "") + hint + content
 
             # 图片 / 表情包：老宿主没有看图能力，就由桥接先看；新宿主交给它看
             图片路径 = []
@@ -2183,6 +2191,8 @@ def main():
                 "atMe": True if not is_group else at_me,
                 "图片": 图片路径,
                 "图片类型": 图片类型,
+                "提示": 上行提示,
+                "群上下文": 上行上下文,
             })
             if r.get("ok"):
                 log("→ DSH（at=%s，图=%d）：%s ｜ %s ｜ raw=%s" % (
