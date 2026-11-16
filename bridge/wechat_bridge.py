@@ -2348,6 +2348,10 @@ def main():
         CFG["群上下文条数"], "开" if CFG["日记"] else "关",
         "/".join(CFG["主人"]) or "（没设）", len(CFG["屏蔽"]),
         "/".join(CFG.get("活跃群") or []) or "（没设）"))
+    log("飞书：%s（%s）" % (
+        "开" if CFG.get("飞书开关") else "关",
+        ("多维表格 " + (CFG.get("飞书数据表") or "?")) if CFG.get("飞书多维表格")
+        else ("webhook" if CFG.get("飞书地址") else "没配地址/表格")))
 
     def config_loop():
         while True:
