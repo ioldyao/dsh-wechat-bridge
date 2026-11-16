@@ -2151,6 +2151,7 @@ def main():
                     at_me
                     or is_master(sender, nickname)
                     or chat in CFG.get("活跃群", [])
+                    or chat in CFG.get("群活跃度", {})
                 )
 
 
