@@ -83,6 +83,7 @@ CFG = {
     "日记目录": "",
     "主人": [],
     "屏蔽": [],
+    "群活跃度": {},
 }
 CFG_TS = 0.0
 
@@ -125,6 +126,16 @@ def refresh_config():
             "群回复间隔秒": max(0.0, float(c.get("群回复间隔秒") or 0)),
             "群每小时上限": max(0.0, float(c.get("群每小时上限") or 0)),
         }
+        活跃度 = {}
+        for k, v in (c.get("群活跃度") or {}).items():
+            名 = str(k or "").strip()
+            try:
+                数 = float(v)
+            except Exception:
+                continue
+            if 名:
+                活跃度[名] = max(0.0, min(100.0, 数))
+        CFG["群活跃度"] = 活跃度
         CFG["活跃群"] = _活跃群列表()
         CFG_TS = time.time()
         return True
@@ -2150,6 +2161,14 @@ def main():
             if is_group:
                 if not called:
                     return
+                # 群活跃度：普通群友的闲聊按概率放行（0 = 只被点名/主人说话才进）
+                if not at_me and not is_master(sender, nickname):
+                    活跃度 = CFG.get("群活跃度", {}).get(chat, 100.0)
+                    if 活跃度 <= 0:
+                        return
+                    if 活跃度 < 100 and random.random() * 100 >= 活跃度:
+                        log("群活跃度：%s 抽签没中（%.0f%%），这条不转" % (chat, 活跃度))
+                        return
                 # 主人说话和点名都必进，只有普通群友的闲聊才吃频率闸
                 if not at_me and not is_master(sender, nickname) and not 频率允许(chat):
                     return
