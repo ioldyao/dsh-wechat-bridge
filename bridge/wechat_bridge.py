@@ -165,12 +165,17 @@ def 规整等级(v):
         return "吐槽"
     return "活跃"
 
-def 群提示(chat, at_me):
+def 群提示(chat, at_me, 接话=False):
     if at_me:
         return "（这条点名了你，必须回。）"
     级 = CFG.get("群活跃度", {}).get(chat, "冒泡")
     if 级 not in 群活跃等级:
         级 = "冒泡"
+    if 接话:
+        return (
+            "（这条没点名你，但对方是在接着跟你说话：你刚在这个群开过口，对方这句就是冲你来的。"
+            "按「%s」的状态正常接一句，别装没看见；真不想接就只回两个字 [不回]。）" % 级
+        )
     return (
         "（这条没点名你。你在这个群的状态是「%s」：%s。想开口就自然接一句，不想回就只回两个字 [不回]，别发别的。）"
         % (级, 等级说明[级])
@@ -311,6 +316,7 @@ def main():
     # ---------- 群回复频率 ----------
 
     chat_hits = {}      # 群名 -> [时间戳]
+    last_talk = {}      # 群名 -> 我上次在这个群说话的时间（「对方是不是在接我的话」用）
 
     def 频率允许(chat):
         gap = CFG.get("群回复间隔秒") or 0
@@ -1554,6 +1560,7 @@ def main():
                     if len(recently_sent) > 100:
                         del recently_sent[:-100]
                     log("✅ 已发到微信（%s）：%s" % (chat, text[:40]))
+                    last_talk[chat] = time.time()
                     发了 = True
 
                 临时图 = []
@@ -2199,7 +2206,7 @@ def main():
                 if not at_me and not is_master(sender, nickname) and not 频率允许(chat):
                     return
                 prefix = group_context(username, chat, CFG["群上下文条数"])
-                hint = 群提示(chat, at_me)
+                hint = 群提示(chat, at_me, 接话=(time.time() - last_talk.get(chat, 0) < 180))
                 if HOST_VERSION >= (1, 4, 7):
                     # 新宿主：提示和群上下文走独立字段，由宿主塞进系统提示词。
                     # 绝不拼进正文 —— 拼进正文模型会顺着复述，发到微信就是内部话刷屏。
