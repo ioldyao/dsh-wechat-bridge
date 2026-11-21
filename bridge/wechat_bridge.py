@@ -1942,6 +1942,54 @@ def main():
         except Exception:
             return False
 
+    def _行正文(row):
+        """图片行的 message_content 可能是 zstd 压缩帧，解成 XML 字符串。"""
+        c = row.get("content")
+        if c is None:
+            return ""
+        if isinstance(c, str):
+            return c
+        try:
+            from wechatauto import db as _wdb
+
+            if c[:4] == b"\x28\xb5\x2f\xfd":
+                z = _wdb._get_zstd_module()
+                if z is not None:
+                    d = _wdb._zstd_decompress(z, c)
+                    return d if isinstance(d, str) else d.decode("utf-8", "replace")
+        except Exception:
+            pass
+        return c.decode("utf-8", "replace")
+
+    def _按引用找图(username, ref):
+        """引用的是图片时，在本地图片消息里找同一张：先比 md5，再比 CDN 缩略图地址。
+
+        微信 4.x 本地 .dat 的文件名和 refermsg 里的 md5 不是一回事，所以两样都比；
+        都找不到说明那张图本机没缓存（比如很久以前发的），返回 None。
+        """
+        try:
+            rm = re.search(r"<img\b[^>]*>", ref or "")
+            if not rm:
+                return None
+            want = dict(re.findall(r'(\w+)\s*=\s*"([^"]*)"', rm.group(0)))
+            目标md5 = (want.get("md5") or "").lower()
+            目标cdn = (want.get("cdnthumburl") or want.get("cdnmidimgurl") or "")[:80]
+            if not 目标md5 and not 目标cdn:
+                return None
+            for row in db.get_image_rows(username, limit=600):
+                m = re.search(r"<img\b[^>]*>", _行正文(row))
+                if not m:
+                    continue
+                a = dict(re.findall(r'(\w+)\s*=\s*"([^"]*)"', m.group(0)))
+                if 目标md5 and (a.get("md5") or "").lower() == 目标md5:
+                    return row
+                cdn = (a.get("cdnthumburl") or a.get("cdnmidimgurl") or "")[:80]
+                if 目标cdn and cdn and cdn == 目标cdn:
+                    return row
+            return None
+        except Exception:
+            return None
+
     def _保存图片(msg, username):
         """普通图片：本地 .dat 解密。wechatauto 的 MediaDownloader 会处理 wxgf。
 
@@ -2145,6 +2193,7 @@ def main():
             raw = msg.get("content") or ""
             图片待下 = ""
             图片类型 = ""
+            引用图行 = None
             if mtype == "图片":
                 content = "（发来一张图片）"
                 图片类型 = "图片"
@@ -2164,7 +2213,13 @@ def main():
                         ref = html.unescape(mr.group(1))
                         # 引用的是图片/视频/语音这类，refermsg 里是一段 XML，正文里没字
                         if "<img" in ref:
-                            quoted = "[图片]"
+                            引用图行 = _按引用找图(username, ref)
+                            if 引用图行:
+                                quoted = "[图片]"
+                                图片待下 = "图片"
+                                图片类型 = "图片"
+                            else:
+                                quoted = "[图片，本机没缓存，看不到]"
                         elif "<videomsg" in ref:
                             quoted = "[视频]"
                         elif "<voicemsg" in ref or "<voice" in ref:
@@ -2257,7 +2312,11 @@ def main():
             # 图片 / 表情包：老宿主没有看图能力，就由桥接先看；新宿主交给它看
             图片路径 = []
             if 图片待下:
-                p = _保存表情包(raw) if 图片待下 == "表情包" else _保存图片(msg, username)
+                p = (
+                    _保存表情包(raw)
+                    if 图片待下 == "表情包"
+                    else _保存图片(引用图行 or msg, username)
+                )
                 if p:
                     if HOST_VERSION >= (1, 2, 0):
                         图片路径 = [p]
