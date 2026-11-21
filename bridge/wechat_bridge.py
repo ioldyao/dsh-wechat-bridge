@@ -1962,20 +1962,27 @@ def main():
                 return None
             shard = msg.get("shard")
             坏 = []
-            for tier in ("full", "thumb"):
-                p = 媒体["下载器"].download_image(
-                    username, local_id, save_dir=folder, tier=tier, shard=shard
-                )
-                if not p or not os.path.isfile(p) or os.path.getsize(p) <= 0:
-                    continue
-                if _图是不是白的(p):
-                    坏.append(p)
-                    continue
-                log("图片落盘：%s（%s 档）" % (p, tier))
-                return p
+            # 刚到的图片，微信那边可能还没把 .dat 下全，等一小会儿再试几轮。
+            for 轮 in range(5):
+                for tier in ("full", "thumb"):
+                    p = 媒体["下载器"].download_image(
+                        username, local_id, save_dir=folder, tier=tier, shard=shard
+                    )
+                    if not p or not os.path.isfile(p) or os.path.getsize(p) <= 0:
+                        continue
+                    if _图是不是白的(p):
+                        坏.append(p)
+                        continue
+                    log("图片落盘：%s（%s 档）" % (p, tier))
+                    return p
+                if 轮 < 4:
+                    import time as _t
+
+                    _t.sleep(1.5)
             if 坏:
                 log("图片这档是白的，退回缩略图：%s" % 坏[-1])
                 return 坏[-1]
+            log("图片还没下来（等 6 秒也没等到），这轮先不带图")
             return None
         except Exception as e:
             log("图片落盘失败：", repr(e))
