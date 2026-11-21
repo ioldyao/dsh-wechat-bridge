@@ -1931,8 +1931,23 @@ def main():
             log("表情包落盘失败：", repr(e))
             return None
 
+    def _图是不是白的(p):
+        """解出来一片白（渐变/纯色）说明这一档没收完或解坏了，换下一档。"""
+        try:
+            from PIL import Image, ImageStat
+
+            im = Image.open(p).convert("L")
+            st = ImageStat.Stat(im)
+            return (st.stddev[0] if st.stddev else 0) < 2.0
+        except Exception:
+            return False
+
     def _保存图片(msg, username):
-        """普通图片：本地 .dat 解密。wechatauto 的 MediaDownloader 会处理 wxgf。"""
+        """普通图片：本地 .dat 解密。wechatauto 的 MediaDownloader 会处理 wxgf。
+
+        档位顺序：先要「不是缩略图」的那一份（.dat，可能就是完整图），解出来
+        如果是纯白（微信只落了半截/预览），再退回缩略图；缩略图也白就算了。
+        """
         if 媒体["导入失败"]:
             return None
         try:
@@ -1945,12 +1960,22 @@ def main():
             local_id = int(msg.get("local_id") or 0)
             if not local_id:
                 return None
-            p = 媒体["下载器"].download_image(
-                username, local_id, save_dir=folder, tier="best", shard=msg.get("shard")
-            )
-            if p and os.path.isfile(p) and os.path.getsize(p) > 0:
-                log("图片落盘：%s" % p)
+            shard = msg.get("shard")
+            坏 = []
+            for tier in ("full", "thumb"):
+                p = 媒体["下载器"].download_image(
+                    username, local_id, save_dir=folder, tier=tier, shard=shard
+                )
+                if not p or not os.path.isfile(p) or os.path.getsize(p) <= 0:
+                    continue
+                if _图是不是白的(p):
+                    坏.append(p)
+                    continue
+                log("图片落盘：%s（%s 档）" % (p, tier))
                 return p
+            if 坏:
+                log("图片这档是白的，退回缩略图：%s" % 坏[-1])
+                return 坏[-1]
             return None
         except Exception as e:
             log("图片落盘失败：", repr(e))
