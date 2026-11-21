@@ -2161,7 +2161,18 @@ def main():
                     body = clean_text(html.unescape(mt.group(1))) if mt else ""
                     mr = re.search(r"<refermsg>.*?<content>(.*?)</content>", raw, re.S)
                     if mr:
-                        quoted = clean_text(html.unescape(mr.group(1)))
+                        ref = html.unescape(mr.group(1))
+                        # 引用的是图片/视频/语音这类，refermsg 里是一段 XML，正文里没字
+                        if "<img" in ref:
+                            quoted = "[图片]"
+                        elif "<videomsg" in ref:
+                            quoted = "[视频]"
+                        elif "<voicemsg" in ref or "<voice" in ref:
+                            quoted = "[语音]"
+                        elif "<emoji" in ref or "<emoticon" in ref:
+                            quoted = "[表情]"
+                        else:
+                            quoted = clean_text(ref)
                         content = (f"（引用：{quoted}）{body}" if quoted else body).strip()
                     else:
                         content = body
